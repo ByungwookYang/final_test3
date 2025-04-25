@@ -86,33 +86,47 @@ def add_message(role, message):
 
 
 # cache_resource는 파일이 업로드 되면
+import re
+from langchain.vectorstores import FAISS
+from langchain.document_loaders import PDFPlumberLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.docstore.document import Document
+
+
+def split_by_problem(text):
+    """문제 단위로 텍스트를 나누는 함수"""
+    pattern = (
+        r"(문제\s*\d+.*?)((?=문제\s*\d+)|\Z)"  # 문제1부터 문제N까지, 마지막까지도 포함
+    )
+    matches = re.findall(pattern, text, re.DOTALL)
+    docs = [Document(page_content=m[0].strip()) for m in matches]
+    return docs
+
+
 def embed_file(file):
-    # 업로드한 파일을 캐시 디렉토리에 저장합니다.
     all_docs = []
-    for file in file:
-        file_content = file.read()
-        file_path = f"./.cache/files/{file.name}"
-        with open(file_path, "wb") as f:
-            f.write(file_content)
 
-        # 단계 1: 문서 로딩
+    for f in file:
+        file_content = f.read()
+        file_path = f"./.cache/files/{f.name}"
+        with open(file_path, "wb") as out_f:
+            out_f.write(file_content)
+
+        # PDF 로딩
         loader = PDFPlumberLoader(file_path)
-        docs = loader.load()
-        all_docs.extend(docs)
+        pages = loader.load()
 
-    # 단계 2: 문서 분할(Split Documents)
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
-    split_documents = text_splitter.split_documents(docs)
+        # 각 페이지를 하나의 문자열로 변환
+        full_text = "\n".join([page.page_content for page in pages])
 
-    # 단계 3: 임베딩(Embedding) 생성
+        # 문제 단위로 split
+        problem_docs = split_by_problem(full_text)
+        all_docs.extend(problem_docs)
+
+    # Embedding 생성
     embeddings = OpenAIEmbeddings()
-
-    # 단계 4: DB 생성(Create DB) 및 저장
-    # 벡터스토어를 생성합니다.
-    vectorstore = FAISS.from_documents(documents=split_documents, embedding=embeddings)
-
-    # 단계 5: 검색기(Retriever) 생성
-    # 문서에 포함되어 있는 정보를 검색하고 생성합니다.
+    vectorstore = FAISS.from_documents(documents=all_docs, embedding=embeddings)
     retriever = vectorstore.as_retriever()
 
     return retriever
